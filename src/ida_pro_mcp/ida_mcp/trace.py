@@ -17,7 +17,7 @@ import json
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .rpc import MCP_SERVER
 from .sync import idasync
@@ -45,6 +45,10 @@ _state: dict[str, Any] = {
     "atexit_registered": False,
     "idb_hook": None,
 }
+
+TraceListener = Callable[[dict[str, Any]], None]
+_listener_lock = threading.Lock()
+_listeners: set[TraceListener] = set()
 
 
 @idasync
@@ -80,6 +84,7 @@ def _netnode_flush_segment(payload: bytes, record_count: int) -> None:
 def _netnode_iter_blobs() -> list[bytes]:
     """Return every segment's compressed blob in segment-id order."""
     import ida_netnode
+
     node = ida_netnode.netnode(IDB_NETNODE_NAME, 0, False)
     if node == ida_netnode.BADNODE:
         return []
@@ -218,9 +223,7 @@ def configure_idb(
     batch_bytes: int = _DEFAULT_BATCH_BYTES,
 ) -> None:
     """Enable IDB tracing. Batches writes before committing to the netnode."""
-    new_backend = NetnodeBackend(
-        batch_records=batch_records, batch_bytes=batch_bytes
-    )
+    new_backend = NetnodeBackend(batch_records=batch_records, batch_bytes=batch_bytes)
     with _state_lock:
         old = _state["idb_backend"]
         _state["idb_backend"] = new_backend
@@ -287,6 +290,27 @@ def _dispatch(record: dict) -> None:
         except Exception:
             pass
 
+    with _listener_lock:
+        listeners = tuple(_listeners)
+    for listener in listeners:
+        try:
+            listener(dict(record))
+        except Exception:
+            # Observability must never alter the result of a tool call.
+            pass
+
+
+def subscribe(listener: TraceListener) -> None:
+    """Receive completed tool-call records in dispatch order."""
+    with _listener_lock:
+        _listeners.add(listener)
+
+
+def unsubscribe(listener: TraceListener) -> None:
+    """Stop receiving completed tool-call records."""
+    with _listener_lock:
+        _listeners.discard(listener)
+
 
 def install_tracer() -> None:
     """Wrap tools/call. Idempotent; lifts the tracer to outermost if already wrapped."""
@@ -332,5 +356,7 @@ __all__ = [
     "install_tracer",
     "shutdown",
     "iter_idb_records",
+    "subscribe",
+    "unsubscribe",
     "IDB_NETNODE_NAME",
 ]

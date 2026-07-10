@@ -341,6 +341,16 @@ uv run ida-pro-mcp --ida-rpc http://127.0.0.1:13337?ext=dbg
 6. dbg_pty_close(session_id)
 ```
 
+### 实时调用面板
+
+IDA 图形界面启动 MCP 服务时会自动打开 `MCP Activity` 子视图，也可从
+`View -> Open subviews -> MCP Activity` 重新打开。面板实时显示工具名称、UTC
+时间、执行耗时、状态和脱敏后的参数摘要，最多保留最近 500 条记录。
+
+实时面板不会显示密码、令牌、Cookie 等敏感字段。完整的持久化调用记录仍存储
+在 IDB 的 `$ ida_mcp.trace` netnode 中，可使用 `ida-mcp-trace-dump` 导出；导出
+文件可能包含原始参数和返回值，应按敏感数据处理。
+
 ## MCP 资源
 
 只读的可浏览状态：

@@ -38,6 +38,7 @@ from . import api_resources
 from . import api_survey
 from . import api_composite
 from . import trace as trace
+from . import activity as activity
 from . import api_sigmaker
 
 # Re-export key components for external use
@@ -48,6 +49,7 @@ from .api_core import init_caches
 
 # Tracing is always on: every tools/call is recorded into the IDB netnode.
 trace.configure_idb()
+activity.install()
 
 __all__ = [
     # Infrastructure modules
@@ -68,6 +70,7 @@ __all__ = [
     "api_survey",
     "api_composite",
     "api_sigmaker",
+    "activity",
     # Re-exported components
     "idasync",
     "IDAError",

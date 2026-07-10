@@ -93,6 +93,8 @@ def unload_package(package_name: str):
 
 CONFIG_ACTION_ID = "mcp:configure"
 CONFIG_ACTION_LABEL = "MCP Configuration"
+ACTIVITY_ACTION_ID = "mcp:activity"
+ACTIVITY_ACTION_LABEL = "MCP Activity"
 
 
 class MCPConfigForm(idaapi.Form):
@@ -179,7 +181,11 @@ class MCPConfigHandler(idaapi.action_handler_t):
             if endpoint_changed:
                 print(f"[MCP] Configuration updated: {host}:{port} (not saved)")
 
-        if not endpoint_changed and autostart == old_autostart and persist == old_persist:
+        if (
+            not endpoint_changed
+            and autostart == old_autostart
+            and persist == old_persist
+        ):
             print(f"[MCP] Configuration unchanged: {host}:{port}")
             return 1
 
@@ -188,6 +194,18 @@ class MCPConfigHandler(idaapi.action_handler_t):
             print("[MCP] Applying configuration change without manual restart...")
             self.plugin.run(0)
         return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+class MCPActivityHandler(idaapi.action_handler_t):
+    def __init__(self, plugin: "MCP"):
+        super().__init__()
+        self.plugin = plugin
+
+    def activate(self, ctx):
+        return 1 if self.plugin._show_activity() else 0
 
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
@@ -203,6 +221,9 @@ class MCPUIHooks(ida_kernwin.UI_Hooks):
     def ready_to_run(self):
         ida_kernwin.attach_action_to_menu(
             "Edit/Plugins/", CONFIG_ACTION_ID, idaapi.SETMENU_APP
+        )
+        ida_kernwin.attach_action_to_menu(
+            "View/Open subviews/", ACTIVITY_ACTION_ID, idaapi.SETMENU_APP
         )
         # Skip autostart when running under idalib – the idalib_server manages
         # the MCP server lifecycle itself and would otherwise hit a port conflict
@@ -255,6 +276,13 @@ class MCP(idaapi.plugin_t):
                 MCPConfigHandler(self),
             )
         )
+        ida_kernwin.register_action(
+            ida_kernwin.action_desc_t(
+                ACTIVITY_ACTION_ID,
+                ACTIVITY_ACTION_LABEL,
+                MCPActivityHandler(self),
+            )
+        )
         # Defer menu attachment and autostart until the UI is fully initialized
         self._ui_hooks = MCPUIHooks(self)
         self._ui_hooks.hook()
@@ -274,11 +302,38 @@ class MCP(idaapi.plugin_t):
                 print(f"[MCP] Instance unregistration failed: {e}")
             self._registered_port = None
 
+    def _show_activity(self) -> bool:
+        try:
+            if TYPE_CHECKING:
+                from .ida_mcp import activity
+            else:
+                from ida_mcp import activity
+            return bool(activity.show())
+        except Exception as exc:
+            print(f"[MCP] Failed to show activity viewer: {exc}")
+            return False
+
+    def _shutdown_package_runtime(self) -> None:
+        activity = sys.modules.get("ida_mcp.activity")
+        if activity is not None:
+            try:
+                activity.shutdown()
+            except Exception:
+                pass
+        trace = sys.modules.get("ida_mcp.trace")
+        if trace is not None:
+            try:
+                trace.shutdown()
+            except Exception:
+                pass
+
     def run(self, arg):
         if self.mcp:
             self._unregister_instance()
             self.mcp.stop()
             self.mcp = None
+
+        self._shutdown_package_runtime()
 
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
@@ -297,6 +352,7 @@ class MCP(idaapi.plugin_t):
                 print(f"  Config: http://{self.host}:{port}/config.html")
                 self.mcp = MCP_SERVER
                 self._register_instance(port)
+                self._show_activity()
                 return
             except OSError as e:
                 if e.errno in (48, 98, 10048):  # Address already in use
@@ -314,6 +370,7 @@ class MCP(idaapi.plugin_t):
             import os
             import idc
             import ida_nalt
+
             binary = ida_nalt.get_root_filename() or ""
             idb_path = idc.get_idb_path() or ""
             file_path = register_instance(
@@ -324,10 +381,13 @@ class MCP(idaapi.plugin_t):
                 idb_path=idb_path,
             )
             self._registered_port = port
-            print(f"[MCP] Registered instance: {binary} (pid={os.getpid()}, port={port})")
+            print(
+                f"[MCP] Registered instance: {binary} (pid={os.getpid()}, port={port})"
+            )
             print(f"  Discovery file: {file_path}")
         except Exception as e:
             import traceback
+
             print(f"[MCP] Instance registration failed: {e}")
             traceback.print_exc()
 
@@ -335,12 +395,13 @@ class MCP(idaapi.plugin_t):
         if hasattr(self, "_ui_hooks"):
             self._ui_hooks.unhook()
         ida_kernwin.unregister_action(CONFIG_ACTION_ID)
+        ida_kernwin.unregister_action(ACTIVITY_ACTION_ID)
         self._unregister_instance()
         if self.mcp:
             self.mcp.stop()
+            self.mcp = None
+        self._shutdown_package_runtime()
 
 
 def PLUGIN_ENTRY():
     return MCP()
-
-

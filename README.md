@@ -341,6 +341,18 @@ Typical workflow:
 6. dbg_pty_close(session_id)
 ```
 
+### Live Activity Viewer
+
+Starting the MCP server in IDA automatically opens the `MCP Activity` subview.
+Reopen it from `View -> Open subviews -> MCP Activity`. The viewer shows each
+tool's UTC timestamp, duration, status, and redacted argument summary in real
+time, retaining the latest 500 records.
+
+The viewer hides passwords, tokens, cookies, and similar fields. The complete
+persistent trace remains in the IDB's `$ ida_mcp.trace` netnode and can be
+exported with `ida-mcp-trace-dump`. Treat exported traces as sensitive because
+they can contain original arguments and results.
+
 ## MCP Resources
 
 Read-only browsable state:

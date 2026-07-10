@@ -12,6 +12,7 @@ def _call_through_registry(name: str, arguments: dict | None = None) -> dict:
 def _kill_trace_node() -> None:
     """Wipe the trace netnode."""
     import ida_netnode
+
     n = ida_netnode.netnode(trace.IDB_NETNODE_NAME, 0, False)
     if n != ida_netnode.BADNODE:
         n.kill()
@@ -37,6 +38,7 @@ def _teardown_trace() -> None:
 def _read_stats() -> dict[str, int]:
     """Read counters directly from the trace netnode."""
     import ida_netnode
+
     node = ida_netnode.netnode(trace.IDB_NETNODE_NAME, 0, False)
     if node == ida_netnode.BADNODE:
         return {
@@ -217,6 +219,7 @@ def test_trace_install_tracer_idempotent():
     _reset_trace(batch_records=1)
     try:
         from ..rpc import MCP_SERVER
+
         first = MCP_SERVER.registry.methods["tools/call"]
         trace.install_tracer()
         assert MCP_SERVER.registry.methods["tools/call"] is first
@@ -263,4 +266,45 @@ def test_trace_install_tracer_lifts_to_outermost():
         finally:
             MCP_SERVER.registry.methods["tools/call"] = prior_tracer
     finally:
+        _teardown_trace()
+
+
+@test()
+def test_trace_subscriber_receives_completed_record():
+    """Subscribers receive the same completed record that is persisted."""
+    _reset_trace(batch_records=1)
+    received = []
+
+    def listener(record):
+        received.append(record)
+
+    trace.subscribe(listener)
+    try:
+        _call_through_registry("server_health", {})
+        assert len(received) == 1
+        assert received[0]["tool"] == "server_health"
+        assert received[0]["isError"] is False
+        assert "duration_ms" in received[0]
+    finally:
+        trace.unsubscribe(listener)
+        _teardown_trace()
+
+
+@test()
+def test_trace_subscriber_failure_does_not_break_tool_call():
+    """A broken UI observer cannot change MCP tool-call behavior."""
+    _reset_trace(batch_records=1)
+
+    def listener(_record):
+        raise RuntimeError("observer failed")
+
+    trace.subscribe(listener)
+    try:
+        response = _call_through_registry("server_health", {})
+        assert response["isError"] is False
+        records = list(trace.iter_idb_records())
+        assert len(records) == 1
+        assert records[0]["tool"] == "server_health"
+    finally:
+        trace.unsubscribe(listener)
         _teardown_trace()
