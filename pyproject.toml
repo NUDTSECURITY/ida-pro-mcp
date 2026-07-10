@@ -32,8 +32,8 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/AidPaike/ida-pro-mcp"
-Issues = "https://github.com/AidPaike/ida-pro-mcp/issues"
+Repository = "https://github.com/NUDTSECURITY/ida-pro-mcp"
+Issues = "https://github.com/NUDTSECURITY/ida-pro-mcp/issues"
 
 [build-system]
 requires = ["setuptools"]
