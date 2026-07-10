@@ -1,22 +1,28 @@
-# IDA Pro MCP Live Tool Report
+# IDA Pro MCP 全工具实测报告
 
-- Date: 2026-07-10
-- Endpoint: `http://127.0.0.1:13337/mcp?ext=dbg`
-- IDB: `C:\Users\ZhenyeFan\Desktop\ctfTools\test\attachment\rpc-server.i64`
-- Module: `rpc-server`, imagebase `0x555555554000`
-- Sample entry: `main` = `0x555555556ce1`; sample `.rodata` = `0x555555558000`
-- Tool count: `109`; status counts: `DEBUGGER_CONFIG_BLOCKED` 4, `NEED_DEBUGGER` 20, `OK` 85
+- 日期：2026-07-10
+- MCP 端点：`http://127.0.0.1:13337/mcp?ext=dbg`
+- IDB：`C:\Users\ZhenyeFan\Desktop\ctfTools\test\attachment\rpc-server.i64`
+- 模块：`rpc-server`，镜像基址 `0x555555554000`
+- 样例入口：`main = 0x555555556ce1`
+- 样例只读数据地址：`0x555555558000`
+- 工具总数：`109`
+- 状态统计：通过 `85`，需调试会话 `20`，受调试配置阻塞 `4`
 
-## Summary
+## 总体结论
 
-- MCP initialize, `tools/list`, static analysis, decompile/disasm, memory reads, type operations, comments, signatures, and IDAPython execution were live-tested successfully.
-- Dynamic CLI-style interaction is available through `dbg_pty_*`: MCP started a subprocess, sent stdin, and read stdout.
-- IDA debugger-control tools are callable, but full stepping/register/memory-snapshot testing needs a live debugger session. The current remote Linux debugger endpoint `192.168.230.128:23946` did not respond.
-- During testing, IDA opened `Debug application setup: linux`; the dialog was cancelled, and MCP responsiveness recovered.
+- 已通过真实 MCP 会话完成初始化、`tools/list`、静态分析、反编译、反汇编、
+  内存读取、类型操作、注释、特征码和 IDAPython 执行测试。
+- `dbg_pty_*` 已验证类 CLI 动态交互：MCP 能启动子进程、写入标准输入并持续
+  读取标准输出和标准错误。
+- IDA 调试控制工具均能由 MCP 路由。步进、寄存器和调试内存快照等能力需要
+  活动的 IDA 调试会话，因此未在 `not_running` 状态下伪造“通过”结果。
+- 调试启动类工具已进入真实远程 Linux 调试流程，但当时受到远程路径和启动
+  参数配置阻塞；这不属于 MCP 工具不可调用。
 
-## Dynamic CLI Evidence
+## 动态 CLI 实测证据
 
-Example call sequence:
+调用序列：
 
 ```json
 {
@@ -36,130 +42,134 @@ Example call sequence:
 }
 ```
 
-Observed stdout:
+实际标准输出：
 
 ```text
-ready
+ready
+
 echo:hello-from-mcp
 ```
 
-## Per-Tool Results
+## 工具逐项结果
 
-| # | Tool | Status | Purpose | Example arguments | Observed result |
-|---:|---|---|---|---|---|
-| 1 | `server_health` | OK | Health/ready probe for MCP server and current IDB state. | `{}` | keys=status,uptime_sec,idb_path,module,input_path,imagebase,auto_analysis_ready,hexrays_ready |
-| 2 | `lookup_funcs` | OK | Get functions by address or name (auto-detects) | `{"queries":["main","0x555555556ce1"]}` | keys=result |
-| 3 | `int_convert` | OK | Convert numbers to different formats | `{"inputs":[{"text":"0x10"},{"text":"1234","size":4}]}` | keys=result |
-| 4 | `list_funcs` | OK | List functions with optional filtering and offset/count pagination. | `{"queries":[{"offset":0,"count":3}]}` | keys=result |
-| 5 | `func_query` | OK | Query functions with richer filtering than list_funcs. | `{"queries":[{"filter":"main","count":3}]}` | keys=result |
-| 6 | `list_globals` | OK | List globals with optional filtering and offset/count pagination. | `{"queries":[{"offset":0,"count":3}]}` | keys=result |
-| 7 | `entity_query` | OK | Query IDB entities with typed filters, projection, and pagination. | `{"queries":[{"kind":"functions","filter":"main","count":3}]}` | keys=result |
-| 8 | `imports` | OK | List imports with module names using offset/count pagination. | `{"offset":0,"count":3}` | keys=data,next_offset |
-| 9 | `imports_query` | OK | Query imports with richer filtering than imports(offset,count). | `{"queries":[{"filter":"printf","count":3}]}` | keys=result |
-| 10 | `idb_save` | OK | Save active IDB to disk, optionally to a provided path.      Always packs into a single compressed .i64/.idb, removing the loose     .id0/.id1/.id2/.nam/.til working files. | `{}` | keys=ok,path |
-| 11 | `find_regex` | OK | Search strings by case-insensitive regex with offset/limit pagination. | `{"pattern":"rpc","limit":5}` | keys=n,matches,cursor |
-| 12 | `search_text` | OK | Search the rendered listing for `pattern` over [start, end).      Iterates `idautils.Heads()` in pure Python and renders each via     `ida_lines.generate_disassembly()`. Per-head i | `{"pattern":"main"}` | keys=n,hits,cursor |
-| 13 | `decompile` | OK | Decompile function(s) at address(es); returns pseudocode and per-item errors. | `{"addr":"0x555555556ce1"}` | keys=addr,code,error |
-| 14 | `disasm` | OK | Disassemble function with offset/max_instructions pagination and optional total count. | `{"addr":"0x555555556ce1","max_instructions":12}` | keys=addr,asm,instruction_count,total_instructions,cursor |
-| 15 | `func_profile` | OK | Profile functions with summary metrics and optional sampled details. | `{"queries":[{"filter":"main","count":1}]}` | keys=result |
-| 16 | `analyze_batch` | OK | Run comprehensive analysis over one or more target functions. | `{"queries":[{"addr":"0x555555556ce1"}]}` | keys=result |
-| 17 | `xrefs_to` | OK | Return xrefs to address(es) or named symbols, capped per target with truncation flag. | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 18 | `xref_query` | OK | Query xrefs with direction/type filters and pagination. | `{"queries":[{"addr":"0x555555556ce1","direction":"to","count":5}]}` | keys=result |
-| 19 | `xrefs_to_field` | OK | Get cross-references to structure fields | `{"queries":[{"struct":"codex_missing_struct","field":"missing"}]}` | keys=result |
-| 20 | `callees` | OK | Return unique callees per function, capped by limit. | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 21 | `find_bytes` | OK | Search byte patterns (supports ??) with offset/limit pagination. | `{"patterns":"55 48 89 E5","limit":5}` | keys=result |
-| 22 | `basic_blocks` | OK | Return function CFG blocks with offset/max_blocks pagination. | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 23 | `find` | OK | Search strings/immediates/refs for targets with offset/limit pagination. | `{"type":"string","targets":"rpc","limit":5}` | keys=result |
-| 24 | `insn_query` | OK | Query instructions with mnemonic/operand filters and scoped scans. | `{"queries":[{"func":"0x555555556ce1","count":5,"include_disasm":true}]}` | keys=result |
-| 25 | `export_funcs` | OK | Export function data for addresses in json/c_header/prototypes formats. | `{"addrs":"0x555555556ce1","format":"json"}` | keys=format,functions |
-| 26 | `callgraph` | OK | Build bounded callgraph from roots with depth/node/edge limits. | `{"roots":"0x555555556ce1","max_depth":1,"max_nodes":20}` | keys=result |
-| 27 | `get_bytes` | OK | Read bytes from memory addresses | `{"regions":[{"addr":"0x555555556ce1","size":8}]}` | keys=result |
-| 28 | `get_int` | OK | Read integer values from memory addresses | `{"queries":[{"addr":"0x555555556ce1","type":"u8"}]}` | keys=result |
-| 29 | `get_string` | OK | Read strings from memory addresses | `{"addrs":"0x555555558000"}` | keys=result |
-| 30 | `get_global_value` | OK | Read global variable values by address or symbol name. | `{"queries":[{"addr":"0x555555558000"}]}` | keys=result |
-| 31 | `patch` | OK | Patch bytes at memory addresses with hex data | `{"patches":[{"addr":"0x555555556ce1","data":"55"}]}` | keys=result |
-| 32 | `put_int` | OK | Write integer values to memory addresses | `{"items":[{"addr":"0x555555556ce1","value":85,"type":"u8"}]}` | keys=result |
-| 33 | `declare_type` | OK | Declare C type definitions in local type library. | `{"decls":["struct codex_mcp_test_type { int value; };"]}` | keys=result |
-| 34 | `enum_upsert` | OK | Create or extend local enums in an idempotent way. | `{"queries":[{"name":"codex_mcp_test_enum","members":{"CODEX_MCP_TEST_A":1}}]}` | keys=result |
-| 35 | `read_struct` | OK | Read struct fields from memory at address; auto-detect type when possible. | `{"queries":[{"addr":"0x555555558000","type":"codex_mcp_test_type"}]}` | keys=result |
-| 36 | `search_structs` | OK | Search local structs/unions by name pattern. | `{"filter":"codex_mcp_test*"}` | keys=result |
-| 37 | `type_query` | OK | Query local types with structured filters/projection-friendly output. | `{"queries":[{"filter":"codex_mcp_test*","count":5}]}` | keys=result |
-| 38 | `type_inspect` | OK | Inspect named types (size/kind/declaration/members). | `{"queries":["codex_mcp_test_type"]}` | keys=result |
-| 39 | `set_type` | OK | Apply types (function/global/local/stack) | `{"edits":[{"kind":"function","addr":"0x555555556ce1","type":"int main(int argc, char **argv);","dry_run":true}]}` | keys=result |
-| 40 | `type_apply_batch` | OK | Apply multiple type edits and return aggregate status. | `{"batch":{"edits":[{"kind":"function","addr":"0x555555556ce1","type":"int main(int argc, char **argv);"}],"dry_run":true}}` | keys=ok,applied,failed,stopped,results |
-| 41 | `infer_types` | OK | Infer and apply likely types at target addresses. | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 42 | `add_bookmark` | OK | Add or replace the IDA bookmark at an address. Set prefix="" for no prefix. | `{"addr":"0x555555556ce1","name":"codex_mcp_smoke","prefix":"codex"}` | keys=addr,ea,slot,title,prefix,ok |
-| 43 | `set_comments` | OK | Set comments at addresses (both disassembly and decompiler views) | `{"items":[{"addr":"0x555555556ce1","comment":"codex mcp smoke test","repeatable":false}]}` | keys=result |
-| 44 | `append_comments` | OK | Append comments at addresses, deduping exact text by default. | `{"items":[{"addr":"0x555555556ce1","comment":"codex mcp smoke append","repeatable":false}]}` | keys=result |
-| 45 | `patch_asm` | OK | Patch assembly instructions at addresses | `{"items":[{"addr":"0x555555556ce1","asm":"nop","dry_run":true}]}` | keys=result |
-| 46 | `rename` | OK | Batch-rename funcs/globals/locals/stack vars with dry-run options. | `{"batch":{"func":[{"addr":"0x555555556ce1","name":"main"}],"dry_run":true}}` | keys=func,summary |
-| 47 | `define_func` | OK | Define functions; IDA infers bounds unless end is provided. | `{"items":[{"addr":"0x555555556ce1"}]}` | keys=result |
-| 48 | `define_code` | OK | Convert bytes to code instruction(s) at address(es). | `{"items":[{"addr":"0x555555556ce1"}]}` | keys=result |
-| 49 | `undefine` | OK | Undefine item(s) at address(es), converting back to raw bytes. | `{"items":[{"addr":"0x0","size":0}]}` | keys=result |
-| 50 | `force_recompile` | OK | Invalidate the Hex-Rays decompile cache for one or more functions.      Use after `set_type`, `rename` (especially of locals), `set_op_type`, or     `make_data` so the next `decomp | `{"items":[{"addr":"0x555555556ce1"}]}` | Retested with correct items parameter; main decompiler cache refreshed. |
-| 51 | `set_op_type` | OK | Set the type of an instruction operand. GUI 'Y' / 'O' / '#' equivalent.      Tags an operand at a specific instruction with a desired interpretation.     Useful when the decompiler | `{"items":[{"addr":"0x555555556ce1","op_n":0,"kind":"offset","target_addr":"0x555555556ce1"}]}` | keys=result |
-| 52 | `make_data` | OK | Create a typed data symbol at an address, replacing any prior items.      Use this to harden a symbol boundary that the decompiler is currently     expressing through a neighboring | `{"items":[{"addr":"0x555555558000","type":"byte","name":"codex_mcp_test_byte","delete_existing":false}]}` | keys=result |
-| 53 | `stack_frame` | OK | Return stack variables for function address(es). | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 54 | `declare_stack` | OK | Create stack variables from typed stack declarations. | `{"items":[{"addr":"0x555555556ce1","offset":"-4","name":"codex_stack_test","ty":"int"}]}` | keys=result |
-| 55 | `delete_stack` | OK | Delete stack variables by name or offset. | `{"items":[{"addr":"0x555555556ce1","name":"codex_stack_test"}]}` | keys=result |
-| 56 | `dbg_start` | DEBUGGER_CONFIG_BLOCKED | Start debugger session for current target.      Requires the user to have selected a debugger (Debugger -> Select debugger)     and configured the target (executable path, argument | `{}` | Starts/connects the remote debugger. This run opened IDA Debug application setup and timed out against 192.168.230.128:23946; the modal was cancelled. |
-| 57 | `dbg_status` | OK | Return debugger lifecycle state and current IP if suspended. | `{}` | keys=state |
-| 58 | `dbg_exit` | NEED_DEBUGGER | Terminate active debugger session. | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 59 | `dbg_continue` | NEED_DEBUGGER | Resume execution in active debugger session. | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 60 | `dbg_run_to` | NEED_DEBUGGER | Run debuggee until target address is reached. | `{"addr":"0x555555556ce1"}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 61 | `dbg_step_into` | NEED_DEBUGGER | Execute one instruction, stepping into calls. | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 62 | `dbg_step_over` | NEED_DEBUGGER | Execute one instruction, stepping over calls. | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 63 | `dbg_bps` | OK | List breakpoints with address, enabled status, condition, and language. | `{}` | keys=result |
-| 64 | `dbg_add_bp` | OK | Add breakpoints at one or more addresses. | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 65 | `dbg_delete_bp` | OK | Delete breakpoints at one or more addresses. | `{"addrs":"0x555555556ce1"}` | keys=result |
-| 66 | `dbg_toggle_bp` | OK | Enable or disable existing breakpoints in batch. | `{"items":[{"addr":"0x555555556ce1","enabled":true}]}` | keys=result |
-| 67 | `dbg_set_bp_condition` | OK | Set or clear breakpoint conditions in batch. | `{"items":[{"addr":"0x555555556ce1","condition":"","language":""}]}` | keys=result |
-| 68 | `dbg_regs_all` | NEED_DEBUGGER | Return full register sets for all debugger threads. | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 69 | `dbg_regs_remote` | NEED_DEBUGGER | Return full register sets for specified thread IDs. | `{"tids":[1]}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 70 | `dbg_regs` | NEED_DEBUGGER | Return full registers for current debugger thread. | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 71 | `dbg_gpregs_remote` | NEED_DEBUGGER | Get GP registers for threads | `{"tids":[1]}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 72 | `dbg_gpregs` | NEED_DEBUGGER | Get current thread GP registers | `{}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 73 | `dbg_regs_named_remote` | NEED_DEBUGGER | Return selected registers for a specific thread ID. | `{"thread_id":1,"register_names":"RIP,RSP"}` | Callable with corrected comma-separated register_names; current debugger session is not running. |
-| 74 | `dbg_regs_named` | NEED_DEBUGGER | Get specific current thread registers | `{"register_names":"RIP,RSP"}` | Callable with corrected comma-separated register_names; current debugger session is not running. |
-| 75 | `dbg_stacktrace` | OK | Return current call stack with module and symbol context. | `{}` | keys=result |
-| 76 | `dbg_read` | NEED_DEBUGGER | Read debuggee memory from one or more regions. | `{"regions":[{"addr":"0x555555556ce1","size":8}]}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 77 | `dbg_write` | NEED_DEBUGGER | Write bytes to debuggee memory regions. | `{"regions":[{"addr":"0x555555556ce1","data":"55"}]}` | Tool entrypoint is callable, but it requires a live IDA debugger session. |
-| 78 | `dbg_loop_init` | OK | Initialize MCP-driven debugger polling and return the event cursor. | `{}` | keys=ok,cursor |
-| 79 | `dbg_get_events` | OK | Return debugger events produced by prior MCP wait/continue calls. | `{}` | keys=cursor,events |
-| 80 | `dbg_get_process_options` | OK | Return IDA debugger process options used by MCP-driven starts. | `{}` | keys=path,args,start_dir,hostname,password,port |
-| 81 | `dbg_set_process_options` | OK | Set IDA debugger process options through MCP and return the result. | `{"path":"rpc-server","port":23946}` | Set/read process options succeeded for rpc-server and port 23946. |
-| 82 | `dbg_list_processes` | OK | List processes visible to the selected debugger through MCP. | `{}` | keys=count,processes,error |
-| 83 | `dbg_resolve` | OK | Resolve a symbol or address in the debugger address space.      Useful for confirming that a function from a loaded shared library (e.g.     ``edit_buffer`` in ``libggml.so``) is v | `{"name":"main"}` | keys=input,addr |
-| 84 | `dbg_modules` | NEED_DEBUGGER | List modules loaded in the debuggee process with base addresses. | `{}` | Callable, but current debugger session is not running. |
-| 85 | `dbg_diagnose` | OK | Diagnose MCP-driven debugger readiness without starting or attaching. | `{}` | keys=state,debugger,process_options,input_file_path,resolved_input_file_path,idb_path,remote_tcp,issues |
-| 86 | `dbg_wait_event` | NEED_DEBUGGER | Wait for the next debugger event without resuming execution. | `{"timeout_ms":1}` | Callable, but current debugger session is not running. |
-| 87 | `dbg_start_process_until_event` | DEBUGGER_CONFIG_BLOCKED | Start the configured debugger process via MCP and wait for state/event. | `{"path":"Z:/definitely/not/found.exe","timeout_ms":1}` | Starts/connects the remote debugger. This run opened IDA Debug application setup and timed out against 192.168.230.128:23946; the modal was cancelled. |
-| 88 | `dbg_start_current_file_until_event` | DEBUGGER_CONFIG_BLOCKED | Start the currently loaded input file via MCP and wait for state/event. | `{"timeout_ms":1}` | Starts/connects the remote debugger. This run opened IDA Debug application setup and timed out against 192.168.230.128:23946; the modal was cancelled. |
-| 89 | `dbg_attach_process_until_event` | DEBUGGER_CONFIG_BLOCKED | Attach to a running process through MCP and wait for debugger state/event. | `{"pid":0,"timeout_ms":1}` | Starts/connects the remote debugger. This run opened IDA Debug application setup and timed out against 192.168.230.128:23946; the modal was cancelled. |
-| 90 | `dbg_get_snapshot` | NEED_DEBUGGER | Return an agent-friendly snapshot of the current debugger state. | `{"include_registers":false,"include_stack":false,"disasm_radius":1}` | Callable, but current debugger session is not running. |
-| 91 | `dbg_continue_until_event` | NEED_DEBUGGER | Resume execution and wait for the next debugger event or timeout. | `{"timeout_ms":1}` | Callable, but current debugger session is not running. |
-| 92 | `dbg_add_temp_bp_and_continue` | NEED_DEBUGGER | Set a one-shot breakpoint, resume execution, and wait for an event. | `{"addr":"0x555555556ce1","timeout_ms":1}` | Callable, but current debugger session is not running. |
-| 93 | `dbg_read_around` | NEED_DEBUGGER | Read debuggee memory around an address as hex/ASCII chunks.      Useful for quickly inspecting a buffer pointed to by a register or a     structure field without first computing ex | `{"addr":"0x555555556ce1","radius":8}` | Callable, but current debugger session is not running. |
-| 94 | `dbg_pty_start` | OK | Start an interactive CLI process and capture its stdin/stdout/stderr.      Returns a session ID and PID. You can then attach IDA's debugger to the     returned PID while using dbg_ | `{"path":"C:\\ProgramData\\miniconda3\\python.exe","args":"-c \"import sys; print('ready', flush=True); print('echo:'+sys.stdin.readline().strip(), flush=True)\""}` | keys=session_id,pid,path,args,start_dir,state,exit_code,stdout_bytes |
-| 95 | `dbg_pty_send` | OK | Send data to the stdin of a process started by dbg_pty_start. | `{"session_id":"74a0809244b64606a107eda1392bbccc","data":"hello\\n"}` | keys=ok,bytes_sent |
-| 96 | `dbg_pty_read` | OK | Read stdout/stderr from a process started by dbg_pty_start. | `{"session_id":"74a0809244b64606a107eda1392bbccc","timeout_ms":1000,"max_bytes":4096}` | keys=session_id,eof,stdout_hex,stderr_hex,stdout,stderr |
-| 97 | `dbg_pty_list` | OK | List active CLI sessions started by dbg_pty_start. | `{}` | keys=result |
-| 98 | `dbg_pty_close` | OK | Close a CLI session and terminate its process. | `{"session_id":"74a0809244b64606a107eda1392bbccc"}` | keys=session_id,pid,path,args,start_dir,state,exit_code,stdout_bytes |
-| 99 | `py_eval` | OK | Execute Python in IDA context and return result/stdout/stderr. | `{"code":"result = 1 + 2"}` | Retested after closing the IDA modal dialog; returned result=3. |
-| 100 | `py_exec_file` | OK | Execute a Python script file in IDA context and return stdout/stderr.      Unlike py_eval, this runs the entire file with exec() using a single shared     globals dict (no locals s | `{"file_path":"<temp>/ida_mcp_py_exec_*.py"}` | Retested after closing the IDA modal dialog; temp script returned an object result. |
-| 101 | `survey_binary` | OK | Get a compact overview of the binary in one call. Returns file metadata,     segment layout, entry points, statistics, top 15 strings and functions ranked     by xref count (functi | `{}` | keys=metadata,statistics,segments,entrypoints,interesting_strings,interesting_functions,imports_by_category,call_graph_summary |
-| 102 | `analyze_function` | OK | Compact single-function analysis: pseudocode, strings, constants, callers, callees, xrefs, blocks. | `{"addr":"0x555555556ce1"}` | keys=addr,error,name,prototype,size,decompiled,decompile_error,strings |
-| 103 | `analyze_component` | OK | Analyze related functions as a group: per-function summaries, internal call graph, shared data. | `{"addrs":["0x555555556ce1"]}` | keys=functions,internal_call_graph,shared_globals,interface_functions,internal_only,string_usage |
-| 104 | `diff_before_after` | OK | Rename a function, set its type, or add a comment, and immediately see the     before/after decompilation side by side. Use this instead of calling rename     then decompile separa | `{"addr":"0x555555556ce1","action":"set_comment","action_args":{"comment":"codex diff smoke"}}` | keys=before,after,action_applied,changes_detected |
-| 105 | `trace_data_flow` | OK | Follow cross-references from or to an address, automatically traversing     multiple hops. Use 'forward' to see where data flows TO (xrefs-from), or     'backward' to see where dat | `{"addr":"0x555555556ce1"}` | keys=start,direction,depth_reached,nodes,edges |
-| 106 | `make_signature` | OK | Create unique byte signatures for addresses. Generates the shortest     unique signature starting at each address by walking instructions and     wildcarding operands. Useful for f | `{"addrs":"0x555555556ce1","max_length":32}` | keys=result |
-| 107 | `make_signature_for_function` | OK | Create unique byte signatures for function entry points. Resolves each     name/address to a function, then generates the shortest unique signature     starting at the function sta | `{"addrs":"0x555555556ce1","max_length":64}` | keys=result |
-| 108 | `make_signature_for_range` | OK | Create a byte signature for a specific address range (e.g. a selected     region). Unlike make_signature, this does NOT guarantee uniqueness — it     simply encodes the bytes in th | `{"start":"0x555555556ce1","end":"0x555555556ce9"}` | keys=query,addr,signature,format,unique |
-| 109 | `find_xref_signatures` | OK | Find signatures for code locations that reference an address. For each     input address, finds all code cross-references TO it, generates a unique     signature at each xref site, | `{"addrs":"0x555555556ce1"}` | keys=result |
+| 序号 | 工具 | 状态 | 功能 | 调用示例 |
+|---:|---|---|---|---|
+| 1 | `server_health` | 通过 | 检查 MCP 服务和当前 IDB 就绪状态 | `{}` |
+| 2 | `lookup_funcs` | 通过 | 按函数名或地址查询函数 | `{"queries":["main","0x555555556ce1"]}` |
+| 3 | `int_convert` | 通过 | 转换整数的进制、宽度与表示形式 | `{"inputs":[{"text":"0x10"},{"text":"1234","size":4}]}` |
+| 4 | `list_funcs` | 通过 | 分页列出函数并支持过滤 | `{"queries":[{"offset":0,"count":3}]}` |
+| 5 | `func_query` | 通过 | 使用复合条件查询函数 | `{"queries":[{"filter":"main","count":3}]}` |
+| 6 | `list_globals` | 通过 | 分页列出全局符号 | `{"queries":[{"offset":0,"count":3}]}` |
+| 7 | `entity_query` | 通过 | 按实体类型、字段和分页条件查询 IDB | `{"queries":[{"kind":"functions","filter":"main","count":3}]}` |
+| 8 | `imports` | 通过 | 分页列出导入符号及所属模块 | `{"offset":0,"count":3}` |
+| 9 | `imports_query` | 通过 | 使用复合条件查询导入符号 | `{"queries":[{"filter":"printf","count":3}]}` |
+| 10 | `idb_save` | 通过 | 将当前数据库保存为压缩的 `.i64` 或 `.idb` | `{}` |
+| 11 | `find_regex` | 通过 | 使用正则表达式搜索字符串 | `{"pattern":"rpc","limit":5}` |
+| 12 | `search_text` | 通过 | 在 IDA 渲染后的列表文本中搜索 | `{"pattern":"main"}` |
+| 13 | `decompile` | 通过 | 反编译指定函数并返回伪代码 | `{"addr":"0x555555556ce1"}` |
+| 14 | `disasm` | 通过 | 分页反汇编指定函数 | `{"addr":"0x555555556ce1","max_instructions":12}` |
+| 15 | `func_profile` | 通过 | 汇总函数规模、引用和复杂度指标 | `{"queries":[{"filter":"main","count":1}]}` |
+| 16 | `analyze_batch` | 通过 | 批量执行函数综合分析 | `{"queries":[{"addr":"0x555555556ce1"}]}` |
+| 17 | `xrefs_to` | 通过 | 查询指向地址或符号的交叉引用 | `{"addrs":"0x555555556ce1"}` |
+| 18 | `xref_query` | 通过 | 按方向、类型和分页条件查询交叉引用 | `{"queries":[{"addr":"0x555555556ce1","direction":"to","count":5}]}` |
+| 19 | `xrefs_to_field` | 通过 | 查询指向结构体字段的交叉引用 | `{"queries":[{"struct":"codex_missing_struct","field":"missing"}]}` |
+| 20 | `callees` | 通过 | 查询函数直接调用的子函数 | `{"addrs":"0x555555556ce1"}` |
+| 21 | `find_bytes` | 通过 | 搜索支持通配符的字节模式 | `{"patterns":"55 48 89 E5","limit":5}` |
+| 22 | `basic_blocks` | 通过 | 获取函数控制流图基本块 | `{"addrs":"0x555555556ce1"}` |
+| 23 | `find` | 通过 | 搜索字符串、立即数或引用 | `{"type":"string","targets":"rpc","limit":5}` |
+| 24 | `insn_query` | 通过 | 按助记符、操作数和函数范围查询指令 | `{"queries":[{"func":"0x555555556ce1","count":5,"include_disasm":true}]}` |
+| 25 | `export_funcs` | 通过 | 以 JSON、C 头文件或原型格式导出函数 | `{"addrs":"0x555555556ce1","format":"json"}` |
+| 26 | `callgraph` | 通过 | 按深度和节点上限构建调用图 | `{"roots":"0x555555556ce1","max_depth":1,"max_nodes":20}` |
+| 27 | `get_bytes` | 通过 | 读取 IDB 地址空间中的原始字节 | `{"regions":[{"addr":"0x555555556ce1","size":8}]}` |
+| 28 | `get_int` | 通过 | 按指定整数类型读取值 | `{"queries":[{"addr":"0x555555556ce1","type":"u8"}]}` |
+| 29 | `get_string` | 通过 | 读取指定地址的字符串 | `{"addrs":"0x555555558000"}` |
+| 30 | `get_global_value` | 通过 | 按地址或符号读取全局变量值 | `{"queries":[{"addr":"0x555555558000"}]}` |
+| 31 | `patch` | 通过 | 使用十六进制数据修补 IDB 字节 | `{"patches":[{"addr":"0x555555556ce1","data":"55"}]}` |
+| 32 | `put_int` | 通过 | 按整数类型写入 IDB 值 | `{"items":[{"addr":"0x555555556ce1","value":85,"type":"u8"}]}` |
+| 33 | `declare_type` | 通过 | 向本地类型库声明 C 类型 | `{"decls":["struct codex_mcp_test_type { int value; };"]}` |
+| 34 | `enum_upsert` | 通过 | 幂等创建或扩展本地枚举 | `{"queries":[{"name":"codex_mcp_test_enum","members":{"CODEX_MCP_TEST_A":1}}]}` |
+| 35 | `read_struct` | 通过 | 按结构体类型解析内存字段 | `{"queries":[{"addr":"0x555555558000","type":"codex_mcp_test_type"}]}` |
+| 36 | `search_structs` | 通过 | 按名称搜索本地结构体和联合体 | `{"filter":"codex_mcp_test*"}` |
+| 37 | `type_query` | 通过 | 使用结构化条件查询本地类型 | `{"queries":[{"filter":"codex_mcp_test*","count":5}]}` |
+| 38 | `type_inspect` | 通过 | 查看类型大小、类别、声明和成员 | `{"queries":["codex_mcp_test_type"]}` |
+| 39 | `set_type` | 通过 | 为函数、全局量、局部量或栈变量设置类型 | `{"edits":[{"kind":"function","addr":"0x555555556ce1","type":"int main(int argc, char **argv);","dry_run":true}]}` |
+| 40 | `type_apply_batch` | 通过 | 批量应用类型修改并汇总结果 | `{"batch":{"edits":[{"kind":"function","addr":"0x555555556ce1","type":"int main(int argc, char **argv);"}],"dry_run":true}}` |
+| 41 | `infer_types` | 通过 | 推断并应用目标地址的候选类型 | `{"addrs":"0x555555556ce1"}` |
+| 42 | `add_bookmark` | 通过 | 在指定地址新增或替换书签 | `{"addr":"0x555555556ce1","name":"codex_mcp_smoke","prefix":"codex"}` |
+| 43 | `set_comments` | 通过 | 设置反汇编和反编译视图注释 | `{"items":[{"addr":"0x555555556ce1","comment":"codex mcp smoke test","repeatable":false}]}` |
+| 44 | `append_comments` | 通过 | 去重追加地址注释 | `{"items":[{"addr":"0x555555556ce1","comment":"codex mcp smoke append","repeatable":false}]}` |
+| 45 | `patch_asm` | 通过 | 将汇编指令编码后写入目标地址 | `{"items":[{"addr":"0x555555556ce1","asm":"nop","dry_run":true}]}` |
+| 46 | `rename` | 通过 | 批量重命名函数、全局量、局部量和栈变量 | `{"batch":{"func":[{"addr":"0x555555556ce1","name":"main"}],"dry_run":true}}` |
+| 47 | `define_func` | 通过 | 在指定地址定义函数 | `{"items":[{"addr":"0x555555556ce1"}]}` |
+| 48 | `define_code` | 通过 | 将原始字节定义为代码指令 | `{"items":[{"addr":"0x555555556ce1"}]}` |
+| 49 | `undefine` | 通过 | 取消地址范围内的数据或代码定义 | `{"items":[{"addr":"0x0","size":0}]}` |
+| 50 | `force_recompile` | 通过 | 清除 Hex-Rays 缓存并强制下次重新反编译 | `{"items":[{"addr":"0x555555556ce1"}]}` |
+| 51 | `set_op_type` | 通过 | 设置指令操作数的解释类型 | `{"items":[{"addr":"0x555555556ce1","op_n":0,"kind":"offset","target_addr":"0x555555556ce1"}]}` |
+| 52 | `make_data` | 通过 | 在地址处创建指定类型的数据符号 | `{"items":[{"addr":"0x555555558000","type":"byte","name":"codex_mcp_test_byte","delete_existing":false}]}` |
+| 53 | `stack_frame` | 通过 | 读取函数栈帧及栈变量 | `{"addrs":"0x555555556ce1"}` |
+| 54 | `declare_stack` | 通过 | 按偏移和类型创建栈变量 | `{"items":[{"addr":"0x555555556ce1","offset":"-4","name":"codex_stack_test","ty":"int"}]}` |
+| 55 | `delete_stack` | 通过 | 按名称或偏移删除栈变量 | `{"items":[{"addr":"0x555555556ce1","name":"codex_stack_test"}]}` |
+| 56 | `dbg_start` | 受调试配置阻塞 | 启动当前目标的 IDA 调试会话 | `{}` |
+| 57 | `dbg_status` | 通过 | 查询调试器生命周期状态和当前指令地址 | `{}` |
+| 58 | `dbg_exit` | 需调试会话 | 终止活动调试会话 | `{}` |
+| 59 | `dbg_continue` | 需调试会话 | 继续运行被调试进程 | `{}` |
+| 60 | `dbg_run_to` | 需调试会话 | 运行到指定地址 | `{"addr":"0x555555556ce1"}` |
+| 61 | `dbg_step_into` | 需调试会话 | 单步执行并进入调用 | `{}` |
+| 62 | `dbg_step_over` | 需调试会话 | 单步执行并越过调用 | `{}` |
+| 63 | `dbg_bps` | 通过 | 列出断点、启用状态和条件 | `{}` |
+| 64 | `dbg_add_bp` | 通过 | 批量添加断点 | `{"addrs":"0x555555556ce1"}` |
+| 65 | `dbg_delete_bp` | 通过 | 批量删除断点 | `{"addrs":"0x555555556ce1"}` |
+| 66 | `dbg_toggle_bp` | 通过 | 批量启用或禁用断点 | `{"items":[{"addr":"0x555555556ce1","enabled":true}]}` |
+| 67 | `dbg_set_bp_condition` | 通过 | 设置或清除断点条件 | `{"items":[{"addr":"0x555555556ce1","condition":"","language":""}]}` |
+| 68 | `dbg_regs_all` | 需调试会话 | 读取所有调试线程的完整寄存器集 | `{}` |
+| 69 | `dbg_regs_remote` | 需调试会话 | 按线程编号读取完整寄存器集 | `{"tids":[1]}` |
+| 70 | `dbg_regs` | 需调试会话 | 读取当前线程完整寄存器集 | `{}` |
+| 71 | `dbg_gpregs_remote` | 需调试会话 | 按线程编号读取通用寄存器 | `{"tids":[1]}` |
+| 72 | `dbg_gpregs` | 需调试会话 | 读取当前线程通用寄存器 | `{}` |
+| 73 | `dbg_regs_named_remote` | 需调试会话 | 读取指定线程的指定寄存器 | `{"thread_id":1,"register_names":"RIP,RSP"}` |
+| 74 | `dbg_regs_named` | 需调试会话 | 读取当前线程的指定寄存器 | `{"register_names":"RIP,RSP"}` |
+| 75 | `dbg_stacktrace` | 通过 | 获取当前调用栈及模块、符号上下文 | `{}` |
+| 76 | `dbg_read` | 需调试会话 | 读取被调试进程内存 | `{"regions":[{"addr":"0x555555556ce1","size":8}]}` |
+| 77 | `dbg_write` | 需调试会话 | 写入被调试进程内存 | `{"regions":[{"addr":"0x555555556ce1","data":"55"}]}` |
+| 78 | `dbg_loop_init` | 通过 | 初始化 MCP 调试事件轮询并返回事件游标 | `{}` |
+| 79 | `dbg_get_events` | 通过 | 获取此前等待或继续操作产生的调试事件 | `{}` |
+| 80 | `dbg_get_process_options` | 通过 | 读取 IDA 调试进程启动配置 | `{}` |
+| 81 | `dbg_set_process_options` | 通过 | 通过 MCP 修改调试进程启动配置 | `{"path":"rpc-server","port":23946}` |
+| 82 | `dbg_list_processes` | 通过 | 列出所选调试器可见的进程 | `{}` |
+| 83 | `dbg_resolve` | 通过 | 在调试地址空间解析符号或地址 | `{"name":"main"}` |
+| 84 | `dbg_modules` | 需调试会话 | 列出被调试进程已加载模块及基址 | `{}` |
+| 85 | `dbg_diagnose` | 通过 | 在启动或附加前诊断调试环境 | `{}` |
+| 86 | `dbg_wait_event` | 需调试会话 | 不恢复执行，仅等待下一调试事件 | `{"timeout_ms":1}` |
+| 87 | `dbg_start_process_until_event` | 受调试配置阻塞 | 启动指定调试进程并等待状态或事件 | `{"path":"Z:/definitely/not/found.exe","timeout_ms":1}` |
+| 88 | `dbg_start_current_file_until_event` | 受调试配置阻塞 | 启动当前输入文件并等待状态或事件 | `{"timeout_ms":1}` |
+| 89 | `dbg_attach_process_until_event` | 受调试配置阻塞 | 附加进程并等待状态或事件 | `{"pid":0,"timeout_ms":1}` |
+| 90 | `dbg_get_snapshot` | 需调试会话 | 获取面向 Agent 的调试状态快照 | `{"include_registers":false,"include_stack":false,"disasm_radius":1}` |
+| 91 | `dbg_continue_until_event` | 需调试会话 | 继续执行并等待下一事件或超时 | `{"timeout_ms":1}` |
+| 92 | `dbg_add_temp_bp_and_continue` | 需调试会话 | 添加一次性断点、继续执行并等待事件 | `{"addr":"0x555555556ce1","timeout_ms":1}` |
+| 93 | `dbg_read_around` | 需调试会话 | 以十六进制和 ASCII 读取地址邻近内存 | `{"addr":"0x555555556ce1","radius":8}` |
+| 94 | `dbg_pty_start` | 通过 | 启动可交互 CLI 进程并捕获标准流 | `{"path":"C:\\ProgramData\\miniconda3\\python.exe","args":"-c \"print('ready')\""}` |
+| 95 | `dbg_pty_send` | 通过 | 向 CLI 会话标准输入写入数据 | `{"session_id":"<session_id>","data":"hello\\n"}` |
+| 96 | `dbg_pty_read` | 通过 | 增量读取 CLI 会话标准输出和标准错误 | `{"session_id":"<session_id>","timeout_ms":1000,"max_bytes":4096}` |
+| 97 | `dbg_pty_list` | 通过 | 列出由 MCP 启动的 CLI 会话 | `{}` |
+| 98 | `dbg_pty_close` | 通过 | 关闭 CLI 会话并终止其进程 | `{"session_id":"<session_id>"}` |
+| 99 | `py_eval` | 通过 | 在 IDA 上下文执行 Python 代码 | `{"code":"result = 1 + 2"}` |
+| 100 | `py_exec_file` | 通过 | 在 IDA 上下文执行完整 Python 脚本文件 | `{"file_path":"<temp>/ida_mcp_py_exec_test.py"}` |
+| 101 | `survey_binary` | 通过 | 一次调用获取二进制元数据、段、入口和重点对象概览 | `{}` |
+| 102 | `analyze_function` | 通过 | 聚合分析单个函数的伪代码、常量、引用和调用关系 | `{"addr":"0x555555556ce1"}` |
+| 103 | `analyze_component` | 通过 | 将相关函数作为组件分析内部调用图和共享数据 | `{"addrs":["0x555555556ce1"]}` |
+| 104 | `diff_before_after` | 通过 | 修改名称、类型或注释并比较前后反编译结果 | `{"addr":"0x555555556ce1","action":"set_comment","action_args":{"comment":"codex diff smoke"}}` |
+| 105 | `trace_data_flow` | 通过 | 沿交叉引用多跳跟踪正向或反向数据流 | `{"addr":"0x555555556ce1"}` |
+| 106 | `make_signature` | 通过 | 为地址生成尽可能短的唯一字节特征码 | `{"addrs":"0x555555556ce1","max_length":32}` |
+| 107 | `make_signature_for_function` | 通过 | 为函数入口生成唯一字节特征码 | `{"addrs":"0x555555556ce1","max_length":64}` |
+| 108 | `make_signature_for_range` | 通过 | 为指定地址区间生成字节特征码 | `{"start":"0x555555556ce1","end":"0x555555556ce9"}` |
+| 109 | `find_xref_signatures` | 通过 | 为指向目标地址的代码引用点生成特征码 | `{"addrs":"0x555555556ce1"}` |
 
-## Status Semantics
+## 状态定义
 
-- `OK`: Direct live call returned a valid result in this IDA session.
-- `NEED_DEBUGGER`: Tool is reachable, but requires an active/suspended IDA debugger session.
-- `DEBUGGER_CONFIG_BLOCKED`: Tool starts/connects the debugger and was blocked by the current remote debugger configuration.
-- Write-capable tools used no-op, dry-run, or low-risk examples where possible. Some smoke tests intentionally wrote a test comment/bookmark/type/enum to verify the write path.
+- `通过`：在本次 IDA 会话中直接调用并返回符合工具协议的结构化结果。
+- `需调试会话`：工具入口和参数校验正常，但语义上要求活动或暂停中的 IDA
+  调试会话；本次会话状态为 `not_running`。
+- `受调试配置阻塞`：工具已进入真实调试启动或附加路径，但远程 Linux 目标
+  配置不完整，未能建立活动调试会话。
+- 对可写工具优先采用空操作、`dry_run` 或低风险样例。部分测试写入了专用测试
+  注释、书签、类型和枚举，用于验证完整写入链路。
