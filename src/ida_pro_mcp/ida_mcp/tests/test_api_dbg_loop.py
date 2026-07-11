@@ -116,6 +116,38 @@ def test_dbg_loop_cleanup_temp_breakpoints_does_not_crash():
 
 
 @test()
+def test_dbg_set_process_options_preserves_integer_port():
+    current = {
+        "path": "/old/program",
+        "args": "--old",
+        "start_dir": "/old",
+        "hostname": "host",
+        "password": "password",
+        "port": 23946,
+    }
+    calls = []
+
+    def set_process_options(*args):
+        calls.append(args)
+
+    with (
+        _SavedAttr(api_dbg_loop, "_process_options", lambda: dict(current)),
+        _SavedAttr(api_dbg_loop.ida_dbg, "set_process_options", set_process_options),
+    ):
+        api_dbg_loop.dbg_set_process_options(path="/new/program")
+
+    assert len(calls) == 1
+    assert calls[0] == (
+        "/new/program",
+        "--old",
+        "/old",
+        "host",
+        "password",
+        23946,
+    )
+
+
+@test()
 def test_dbg_pty_session_read_drain_works():
     """_PtySession.read drains queued output and respects timeout."""
     proc = None

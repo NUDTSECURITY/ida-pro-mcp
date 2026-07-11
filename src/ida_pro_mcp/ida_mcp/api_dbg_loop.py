@@ -777,7 +777,7 @@ def dbg_set_process_options(
         _option_value(start_dir, current["start_dir"]),
         _option_value(hostname, current["hostname"]),
         _option_value(password, current["password"]),
-        _option_value(port if port != 0 else None, current["port"]),
+        port if port != 0 else current["port"],
     )
     return _process_options()
 
