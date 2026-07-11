@@ -142,9 +142,11 @@ db0db0c feat(debug): add MCP-driven debugger event loop and interactive CLI I/O
   - 提供 `dbg_pty_*` 交互式 CLI 进程控制。
 - `src/ida_pro_mcp/ida_mcp/tests/test_api_dbg_loop.py`
   - 覆盖新增的调试事件循环 API。
+- `README.md` 与 `README.en.md`
+  - 以中文为默认语言，并提供对应英文文档，集中说明本分叉新增能力。
 - `README.zh.md`
-  - 提供中文项目说明。
-- `README.md` 与 `skills/idapython/SKILL.md`
+  - 保留旧中文文档路径的兼容入口。
+- `skills/idapython/SKILL.md`
   - 说明新增的 MCP 动态调试流程。
 - `reports/ida_mcp_live_tool_report.md`
   - 提供全部 109 个 MCP 工具的实测证据。

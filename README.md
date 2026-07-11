@@ -1,442 +1,161 @@
-# IDA Pro MCP
+# IDA Pro MCP 动态调试增强版
 
-[English](README.md) | [中文](README.zh.md)
+[中文](README.md) | [English](README.en.md)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes IDA Pro / idalib to MCP clients. Use it for AI-assisted reverse engineering: inspect decompilation, add comments, rename symbols, search patterns, control the debugger, and more.
+本项目基于 [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp)
+进行二次开发，重点补充面向 Codex、Claude Code 等 MCP Agent 的动态调试闭环。
 
-This repository provides two complementary servers:
+原项目已经提供的安装机制、静态分析、反编译、交叉引用、类型、内存、修改、
+签名及 headless idalib 等能力，请直接参阅
+[上游项目文档](https://github.com/mrexodia/ida-pro-mcp#readme)。本文只说明本分叉
+新增的功能和使用方式。
 
-- **`ida-pro-mcp`** — stdio/HTTP proxy that connects to a running IDA Pro GUI instance via the bundled IDA plugin.
-- **`idalib-mcp`** — headless supervisor that spawns per-database `idalib` worker processes, so you can analyze binaries without opening the IDA GUI.
+## 二次开发目标
 
-## Table of Contents
+传统 IDA MCP 工具主要完成一次性调用，例如反编译函数、读取寄存器或执行继续。
+对于 AI Agent，单次命令不能形成稳定的动态分析闭环：执行恢复后，Agent 还需要
+等待暂停、识别事件、读取现场，再根据结果决定下一步。
 
-- [Overview](#overview)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Transports](#transports)
-- [Tool Reference](#tool-reference)
-- [Debugger Extension](#debugger-extension)
-- [MCP Resources](#mcp-resources)
-- [Prompt Engineering](#prompt-engineering)
-- [Development](#development)
-
-## Overview
-
-### `ida-pro-mcp` (GUI mode)
-
-Installs an IDA Pro plugin (`Edit → Plugins → MCP` or `Ctrl-Alt-M`). When the plugin starts an HTTP server, `ida-pro-mcp` auto-discovers it and proxies MCP requests from your client into IDA.
-
-Typical flow:
-
-1. Open a binary in IDA Pro.
-2. Start the MCP plugin (it can autostart).
-3. Configure your MCP client to run `ida-pro-mcp`.
-4. Ask the LLM to analyze the database.
-
-### `idalib-mcp` (headless mode)
-
-Runs a supervisor that keeps each open database in its own `idalib` worker process. Workers register themselves locally and outlive the supervisor; a new supervisor adopting the same path reuses the running worker. Workers self-exit after an idle TTL (default 1 hour).
-
-Typical flow:
-
-```python
-idb_open("/path/to/binary.exe", preferred_session_id="binary_a")
-decompile("main", database="binary_a")
-xrefs_to("ImportantExport", database="binary_a")
-```
-
-Every headless tool call must include a `database` argument naming the session returned by `idb_open` (or listed by `idb_list`).
-
-## Prerequisites
-
-- [Python](https://www.python.org/downloads/) **3.11 or higher**
-  - Use `idapyswitch` to point IDA at the newest Python version if needed.
-- [IDA Pro](https://hex-rays.com/ida-pro) **8.3 or higher**, **9.0+ recommended**
-  - **IDA Free is not supported.**
-- [uv](https://astral.sh/uv) (recommended for running from source)
-- A supported MCP client (see `--list-clients`)
-
-## Installation
-
-### From source
-
-```bash
-uv sync
-uv run ida-pro-mcp --install
-```
-
-`--install` copies the IDA plugin to `%APPDATA%\Hex-Rays\IDA Pro\plugins\` (Windows) or `~/.idapro/plugins/` (macOS/Linux) and optionally writes MCP client configuration.
-
-> **Important**: After installing, completely restart IDA Pro so the new plugin loads. Some MCP clients also run in the background and need to be fully quit and restarted.
-
-### Install for a specific MCP client
-
-```bash
-uv run ida-pro-mcp --install claude
-uv run ida-pro-mcp --install cursor,vscode
-```
-
-Use `--scope project` for project-level config or `--scope global` for user-level config.
-
-### Print configuration without installing
-
-```bash
-uv run ida-pro-mcp --config
-```
-
-### Uninstall
-
-```bash
-uv run ida-pro-mcp --uninstall
-```
-
-### Headless `idalib-mcp`
-
-`idalib-mcp` requires the `idapro` package and an activated `idalib` installation. Activate it once with the script shipped by your IDA version, for example:
-
-```bash
-# Windows
-uv run "C:\Program Files\IDA Professional 9.2\idalib\python\py-activate-idalib.py"
-
-# macOS
-uv run "/Applications/IDA Professional 9.2.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
-```
-
-Then run the headless supervisor:
-
-```bash
-# stdio mode (most clients)
-uv run idalib-mcp --stdio
-
-# HTTP mode with an initial binary
-uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
-
-# HTTP mode without an initial binary
-uv run idalib-mcp --host 127.0.0.1 --port 8745
-```
-
-## Usage
-
-### Start the IDA Pro plugin
-
-In IDA Pro, open a binary and either:
-
-- Wait for autostart (if enabled), or
-- Use `Edit → Plugins → MCP` (hotkey `Ctrl-Alt-M`).
-
-The plugin registers the running instance locally; `ida-pro-mcp` auto-discovers it.
-
-### Connect with an MCP client
-
-After installing, your client will run `ida-pro-mcp` over stdio. The proxy discovers the IDA instance and forwards every tool call. If you prefer HTTP/SSE, run:
-
-```bash
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
-```
-
-### Headless session model
-
-`idalib-mcp` is a supervisor, not a worker. It spawns detached worker processes and can adopt already-running GUI or worker instances. There is no `idb_close` tool; sessions stay alive until idle TTL expires or the user closes the GUI window.
-
-`idb_open` backend selection (`mode` parameter):
-
-- `prefer_headless` (default): spawn/adopt an idalib worker.
-- `force_headless`: spawn/adopt a worker, never adopt a GUI.
-- `prefer_gui`: adopt a GUI if one has the file open; otherwise spawn a worker.
-- `force_gui`: adopt a GUI if one has the file open; otherwise launch a new IDA GUI process.
-
-Management tools:
-
-- `idb_open(input_path, mode="prefer_headless", run_auto_analysis=True, build_caches=True, init_hexrays=True, preferred_session_id="", idle_ttl_sec=600)` — open/adopt a session.
-- `idb_list()` — list open sessions and running GUI instances.
-- `idb_save(session_id, path="")` — save an IDB.
-- `server_health(database=<id>)` — per-session health.
-
-Worker controls:
-
-- `--max-workers N` (default `4`, `0` = unlimited)
-- `IDA_MCP_MAX_WORKERS` environment variable
-
-## Transports
-
-### `ida-pro-mcp`
-
-- **stdio** (default) — what most MCP clients expect.
-- **HTTP / SSE** — pass a URL to `--transport`, e.g. `http://127.0.0.1:8744/sse`.
-
-### `idalib-mcp`
-
-- **HTTP** (default) — `--host`/`--port`.
-- **stdio** — `--stdio`.
-
-### Unsafe tools and extensions
-
-Some tools are marked unsafe and are only available when explicitly enabled:
-
-- `idalib-mcp`: pass `--unsafe`.
-- `ida-pro-mcp`: the proxy forwards whatever the running IDA instance exposes.
-
-Debugger tools belong to the `dbg` extension and are hidden by default. Enable them with the `?ext=dbg` query parameter:
-
-```bash
-# Direct HTTP
-http://127.0.0.1:13337/mcp?ext=dbg
-
-# Through the stdio proxy
-uv run ida-pro-mcp --ida-rpc http://127.0.0.1:13337?ext=dbg
-```
-
-## Tool Reference
-
-The server exposes the tools below. Schemas (parameter names, types, descriptions) are available from any MCP client via `tools/list`.
-
-### Core IDB metadata (`api_core`)
-
-- `server_health()` — server status, uptime, current IDB path.
-- `lookup_funcs(queries)` — get function(s) by address or name.
-- `int_convert(inputs)` — convert numbers between decimal, hex, binary, ASCII, etc.
-- `list_funcs(queries)` — list functions with filtering and pagination.
-- `func_query(queries)` — richer function query (size, type, name filters).
-- `list_globals(queries)` — list global variables.
-- `entity_query(queries)` — generic query over functions, globals, imports, strings, names.
-- `imports(offset, count)` — list imported symbols.
-- `imports_query(queries)` — richer import query.
-- `idb_save()` — save the current IDB.
-
-### Analysis (`api_analysis`)
-
-- `decompile(addr)` — decompile a function.
-- `disasm(addr)` — disassemble a function.
-- `analyze_function(addr)` — compact single-function analysis.
-- `analyze_batch(queries)` — comprehensive per-function analysis.
-- `analyze_component(addrs)` — analyze a group of related functions.
-- `func_profile(queries)` — function metrics and sampled details.
-- `survey_binary()` — compact overview of the binary.
-- `basic_blocks(addrs)` — basic blocks of function(s).
-- `callees(addrs)` — functions called by function(s).
-- `xrefs_to(addrs)` — cross-references to address(es).
-- `xref_query(queries)` — generic xref query.
-- `xrefs_to_field(queries)` — xrefs to struct field(s).
-- `callgraph(roots)` — bounded call graph from root function(s).
-- `trace_data_flow(addr)` — follow cross-references forward or backward.
-- `search_text(pattern)` — search rendered disassembly/comments.
-- `export_funcs(addrs, format)` — export function data (json, c_header, prototypes).
-
-### Search & patterns
-
-- `find_regex(pattern)` — case-insensitive regex search in strings.
-- `find_bytes(patterns)` — byte pattern search (e.g. `48 8B ?? ??`).
-- `find(type, targets)` — search strings, immediates, data/code references.
-- `find_xref_signatures(addrs)` — create signatures for code that references an address.
-- `insn_query(queries)` — query instructions by mnemonic/operand filters.
-
-### Memory (`api_memory`)
-
-- `get_bytes(regions)` — read raw bytes.
-- `get_int(queries)` — read integers (`u8`, `i32le`, `u64be`, etc.).
-- `get_string(addrs)` — read null-terminated strings.
-- `get_global_value(queries)` — read global values by address or name.
-- `patch(patches)` — patch bytes.
-- `put_int(items)` — write integers.
-
-### Modification (`api_modify`)
-
-- `set_comments(items)` — set comments.
-- `append_comments(items)` — append comments.
-- `add_bookmark(addr, name, prefix)` — add IDA bookmarks.
-- `rename(batch)` — batch rename functions, globals, locals, stack vars.
-- `patch_asm(items)` — patch assembly instructions.
-- `declare_type(decls)` — declare C types.
-- `set_type(edits)` — apply types to functions/globals/locals/stack.
-- `type_apply_batch(batch)` — batch type edits.
-- `infer_types(addrs)` — infer types at address(es).
-- `define_func(items)` — define functions.
-- `define_code(items)` — convert bytes to code.
-- `undefine(items)` — undefine items.
-- `force_recompile(addrs)` — invalidate decompiler cache.
-- `set_op_type(items)` — set operand type.
-- `make_data(items)` — create typed data symbols.
-
-### Stack (`api_stack`)
-
-- `stack_frame(addrs)` — get stack variables.
-- `declare_stack(items)` — create stack variables.
-- `delete_stack(items)` — delete stack variables.
-
-### Types (`api_types`)
-
-- `read_struct(queries)` — read struct fields at address(es).
-- `search_structs(filter)` — search structures by name.
-- `type_query(queries)` — query local types.
-- `type_inspect(queries)` — inspect named types.
-- `enum_upsert(queries)` — create or update enums.
-
-### Signatures (`api_sigmaker`)
-
-- `make_signature(addrs)` — create byte signatures for addresses.
-- `make_signature_for_function(addrs)` — create signatures for function entries.
-- `make_signature_for_range(start, end)` — create signatures for a range.
-
-### Python execution (`api_python`)
-
-- `py_eval(code)` — execute Python in IDA context.
-- `py_exec_file(file_path)` — execute a Python script file in IDA context.
-
-### Composite / diff (`api_composite`)
-
-- `diff_before_after(addr, action, action_args)` — rename/type/comment with before/after decompilation.
-
-## Debugger Extension
-
-Debugger tools are in the `dbg` extension group and require `?ext=dbg` (see [Transports](#transports)).
-
-The extension provides three complementary APIs:
-
-1. **One-shot control** — single actions that return immediately.
-2. **Event-loop control** — polling primitives that block until debugger state changes and return a structured snapshot.
-3. **Interactive CLI I/O** — start a target outside IDA, capture stdin/stdout/stderr, then attach IDA to the PID.
-
-### One-shot control
-
-- `dbg_start()` / `dbg_exit()` — start or exit debugger session.
-- `dbg_continue()` / `dbg_run_to(addr)` / `dbg_step_into()` / `dbg_step_over()` — execution control.
-- `dbg_status()` — current debugger lifecycle state.
-- `dbg_bps()` / `dbg_add_bp(addrs)` / `dbg_delete_bp(addrs)` / `dbg_toggle_bp(items)` / `dbg_set_bp_condition(items)` — breakpoints.
-- `dbg_regs()` / `dbg_regs_all()` / `dbg_regs_remote(tids)` / `dbg_gpregs()` / `dbg_stacktrace()` — registers and stack.
-- `dbg_read(regions)` / `dbg_write(regions)` / `dbg_read_around(addr)` — memory.
-- `dbg_list_processes()` / `dbg_modules()` / `dbg_resolve(name)` — processes and modules.
-- `dbg_get_process_options()` / `dbg_set_process_options(...)` — launch options.
-
-### Event-loop control
-
-- `dbg_loop_init()` — get the debugger event cursor.
-- `dbg_wait_event(cursor, timeout_ms)` — wait for an event without resuming.
-- `dbg_continue_until_event(timeout_ms)` — resume and wait for the next event.
-- `dbg_start_process_until_event(path, args, start_dir, timeout_ms)` — start and wait.
-- `dbg_start_current_file_until_event(timeout_ms)` — start current file and wait.
-- `dbg_attach_process_until_event(pid, timeout_ms)` — attach and wait.
-- `dbg_add_temp_bp_and_continue(addr, timeout_ms)` — temporary breakpoint + continue.
-- `dbg_get_snapshot(...)` — current IP, disassembly, registers, stack trace.
-- `dbg_get_events(cursor, limit)` — read captured events.
-- `dbg_diagnose(include_process_list)` — readiness check without starting anything.
-
-### Interactive CLI I/O
-
-- `dbg_pty_start(path, args, start_dir)` — start a CLI process.
-- `dbg_pty_send(session_id, data)` — send to stdin.
-- `dbg_pty_read(session_id, max_bytes, timeout_ms)` — read stdout/stderr.
-- `dbg_pty_list()` — list sessions.
-- `dbg_pty_close(session_id)` — terminate session.
-
-Typical workflow:
+本分叉增加了面向 Agent 的调试编排层：
 
 ```text
-1. dbg_pty_start("/path/to/crackme", args="flag.txt") → {session_id, pid}
-2. attach IDA debugger to pid
-3. dbg_pty_read(session_id, timeout_ms=500) → "Enter password:"
-4. dbg_pty_send(session_id, data="guess\n")
-5. dbg_pty_read(session_id, timeout_ms=500) → response
-6. dbg_pty_close(session_id)
+MCP Agent
+  -> 启动或附加目标
+  -> 等待 IDA 调试事件
+  -> 获取寄存器、调用栈和反汇编快照
+  -> 设置临时断点或读取内存
+  -> 根据结果继续执行
 ```
 
-### Live Activity Viewer
+整个流程由 MCP 工具调用驱动，不依赖 Debugger Hook 捕获调试状态。
 
-Starting the MCP server in IDA automatically opens the `MCP Activity` subview.
-Reopen it from `View -> Open subviews -> MCP Activity`. The viewer shows each
-tool's UTC timestamp, duration, status, and redacted argument summary in real
-time, retaining the latest 500 records.
+## 新增功能
 
-The viewer hides passwords, tokens, cookies, and similar fields. The complete
-persistent trace remains in the IDB's `$ ida_mcp.trace` netnode and can be
-exported with `ida-mcp-trace-dump`. Treat exported traces as sensitive because
-they can contain original arguments and results.
+### 1. MCP 调试事件循环
 
-## MCP Resources
+新增 `api_dbg_loop.py`，通过 `ida_dbg.wait_for_next_event` 进行有界轮询，并返回
+结构化事件和状态快照。
 
-Read-only browsable state:
+主要能力：
 
-- `ida://idb/metadata` — IDB file info (path, arch, base, size, hashes).
-- `ida://idb/segments` — memory segments with permissions.
-- `ida://idb/entrypoints` — entry points.
-- `ida://cursor` — current cursor position and function.
-- `ida://selection` — current selection range.
-- `ida://types` — all local types.
-- `ida://structs` — all structures/unions.
-- `ida://struct/{name}` — structure definition.
-- `ida://import/{name}` — import details.
-- `ida://export/{name}` — export details.
-- `ida://xrefs/from/{addr}` — cross-references from an address.
+- 启动、附加、等待和继续执行直到下一事件。
+- 使用事件游标增量读取 MCP 调试事件。
+- 设置一次性断点并继续执行。
+- 在一次调用中返回当前 IP、函数、通用寄存器、调用栈、断点和附近反汇编。
+- 超时后返回结构化状态，不让 Agent 无限等待。
 
-## Prompt Engineering
+### 2. 调试环境诊断
 
-LLMs can hallucinate, especially with integer/byte conversions. A minimal prompt:
+新增面向远程调试的配置和诊断能力：
 
-```md
-Your task is to analyze a crackme in IDA Pro. Use the MCP tools to retrieve information.
+- 读取和设置 IDA 调试进程路径、参数、工作目录、远程主机和端口。
+- 检查远程调试端口连通性。
+- 枚举调试器可见进程和已加载模块。
+- 解析调试地址空间中的符号。
+- 检查本地路径与远程目标配置不一致等常见问题。
+- 兼容 IDA 9.2 的进程选项调用，并正确保留未修改的调试端口。
 
-- Inspect the decompilation and add comments with your findings.
-- Rename variables and functions to sensible names.
-- Correct variable and argument types where necessary (especially pointers and arrays).
-- If more detail is needed, inspect the disassembly and add comments.
-- NEVER convert number bases yourself. Use the `int_convert` MCP tool.
-- Do not brute force; derive solutions from analysis and simple Python scripts.
-- Create a report.md with your findings and steps taken.
-- When you find a solution, ask the user for feedback with the password you found.
+### 3. 交互式 CLI I/O
+
+`dbg_pty_*` 工具可以启动本机 CLI 进程，并通过 MCP 持续读写
+stdin/stdout/stderr。Agent 可以驱动菜单程序、协议客户端或命令行题目，同时将
+IDA 调试器附加到返回的 PID。
+
+### 4. MCP Activity 实时面板
+
+IDA 中新增 `MCP Activity` 子视图，实时显示：
+
+- UTC 调用时间。
+- MCP 工具名称。
+- 执行耗时和成功/错误状态。
+- 有界、脱敏后的参数摘要。
+
+面板最多保留最近 500 条记录，密码、令牌、Cookie 等字段在进入面板缓存前即被
+脱敏。完整审计记录仍写入 IDB 的 `$ ida_mcp.trace` netnode，可使用
+`ida-mcp-trace-dump` 导出。
+
+## 新增 MCP 工具
+
+| 类别 | 工具 |
+|---|---|
+| 事件与生命周期 | `dbg_loop_init`、`dbg_get_events`、`dbg_wait_event`、`dbg_start_process_until_event`、`dbg_start_current_file_until_event`、`dbg_attach_process_until_event`、`dbg_continue_until_event`、`dbg_add_temp_bp_and_continue` |
+| 配置与诊断 | `dbg_get_process_options`、`dbg_set_process_options`、`dbg_list_processes`、`dbg_diagnose`、`dbg_resolve`、`dbg_modules` |
+| 状态与内存 | `dbg_get_snapshot`、`dbg_read_around` |
+| CLI I/O | `dbg_pty_start`、`dbg_pty_send`、`dbg_pty_read`、`dbg_pty_list`、`dbg_pty_close` |
+
+## 快速开始
+
+要求与上游一致：Python 3.11+、IDA Pro 8.3+，建议使用 IDA Pro 9.x；不支持
+IDA Free。
+
+```powershell
+git clone https://github.com/NUDTSECURITY/ida-pro-mcp.git
+cd ida-pro-mcp
+uv sync
+uv run ida-pro-mcp --install codex,claude-code --transport streamable-http --scope global
 ```
 
-Another systematic prompt:
+安装后完全重启 IDA 和 MCP 客户端。在 IDA 中打开目标文件，MCP 插件默认自动
+启动，也可使用 `Edit -> Plugins -> MCP` 或 `Ctrl-Alt-M`。
 
-```md
-Your task is to create a complete reverse engineering analysis.
+动态调试工具属于 `dbg` 扩展组，连接 URL 必须包含：
 
-1. **Decompilation Analysis**: inspect decompiler output, add detailed comments, focus on actual functionality.
-2. **Improve Readability**: rename variables/functions, correct types.
-3. **Deep Dive**: examine disassembly when needed, document low-level behaviors.
-4. **Constraints**: never convert number bases yourself — use `int_convert`; derive conclusions from actual analysis.
-5. **Documentation**: produce RE/*.md files with findings and methodology.
+```text
+http://127.0.0.1:13337/mcp?ext=dbg
 ```
 
-### Tips for better accuracy
+安装器默认写入不带扩展参数的基础 URL；需要动态调试时，请在 Codex、Claude Code
+等客户端配置中将 URL 改为上面的地址，然后重启客户端。
 
-- Tell the LLM to use `int_convert` instead of converting numbers itself.
-- For heavy math, consider pairing with a dedicated math MCP.
-- Deobfuscate first where possible: string encryption, import hashing, control-flow flattening, code encryption, anti-decompilation tricks.
-- Use Lumina/FLIRT to resolve open-source library code and C++ STL before analysis.
+使用 stdio 代理时可显式指定 IDA RPC：
 
-## Development
-
-Adding a tool is simple: add a new `@tool` function to one of the `src/ida_pro_mcp/ida_mcp/api_*.py` modules and it is automatically registered.
-
-Run the MCP inspector for interactive testing:
-
-```bash
-npx -y @modelcontextprotocol/inspector
+```powershell
+uv run ida-pro-mcp --ida-rpc "http://127.0.0.1:13337?ext=dbg"
 ```
 
-Run the headless test harness:
+## 动态调试流程
 
-```bash
-uv run ida-mcp-test tests/crackme03.elf -q
-uv run ida-mcp-test tests/typed_fixture.elf -q
+建议 Agent 按以下顺序调用：
+
+```text
+1. dbg_diagnose                 检查调试器、目标配置和远程连接
+2. dbg_set_process_options      设置目标路径、参数和工作目录
+3. dbg_start_process_until_event 启动目标并等待首次事件
+4. dbg_get_snapshot             获取寄存器、调用栈和反汇编
+5. dbg_add_temp_bp_and_continue 运行到关键地址
+6. dbg_read_around              检查寄存器或指针附近内存
+7. dbg_continue_until_event     继续到下一事件并重复分析
 ```
 
-Measure coverage across both fixtures:
+Windows 版 IDA 调试 Linux ELF 时，需要远程 Linux 调试器，并且 `path` 与
+`start_dir` 必须是远程 Linux 主机上的绝对路径。
 
-```bash
-uv run coverage erase
-uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf -q
-uv run coverage run --append -m ida_pro_mcp.test tests/typed_fixture.elf -q
-uv run coverage report --show-missing
+## 当前边界
+
+- 调试器后端仍由 IDA 提供，本项目不会绕过目标格式和操作系统限制。
+- 事件只在 MCP 调用等待期间轮询，不是常驻后台事件流。
+- 不使用 Debugger Hook，因此不会记录 MCP 未轮询期间的全部中间事件。
+- `dbg_pty_*` 当前使用本机进程管道，不直接控制远程 Linux 目标的终端。
+- 启动远程目标前，需要用户准备目标文件、依赖库和 IDA remote debug server。
+
+## 验证与报告
+
+- [全部 MCP 工具实测报告](reports/ida_mcp_live_tool_report.md)
+- [调试器与上游差异报告](reports/ida_mcp_debugger_and_fork_delta.md)
+
+核心测试：
+
+```powershell
+$env:IDADIR = "C:\Program Files\IDA Professional 9.2"
+ida-mcp-test tests/crackme03.elf --category api_dbg_loop --quiet
+ida-mcp-test tests/typed_fixture.elf --category trace --quiet
+python -m pytest tests/test_mcp_spec_tools_list.py tests/test_mcp_spec_schema_generation.py
 ```
 
-Generate a changelog of direct commits:
+## 上游与许可证
 
-```bash
-git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
-```
+- 上游项目：[mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp)
+- 当前分叉：[NUDTSECURITY/ida-pro-mcp](https://github.com/NUDTSECURITY/ida-pro-mcp)
+- 许可证：[MIT](LICENSE)
 
-## Acknowledgments
-
-Original concept and implementation by [mrexodia](https://github.com/mrexodia), [can1357](https://github.com/can1357), and contributors. The headless `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
+本项目保留上游作者和贡献者信息，并在其 MIT 许可证基础上继续开发。
